@@ -1,7 +1,6 @@
 
 
 
-
 # --------------------------------------------------- 
 
 
@@ -123,7 +122,7 @@ def create_figure_directories(data_imputed):
         os.makedirs(f'figures/{folder_name}')
 
         for in_combination in in_combinations:
-            in_combination_str = '_'.join(in_combination)
+            in_combination_str = '+'.join(in_combination)
             os.makedirs(f'figures/{folder_name}/{in_combination_str}')
 
             for out_combination in out_combinations:
@@ -195,14 +194,22 @@ def save_model_results(model_path, model_name, in_combination_str, out_combinati
     # Clear the console
     clear_console()
 
+ 
+
 
 # --------------------------------------------------- 
 # --------------------------------------------------- 
-def optimized_regression(X_train, y_train, X_test, y_test, models):
-    opt_times = {}
-    opt_durations = {}  # New dictionary to store model durations
-    
+# --------------------------------------------------- 
+# Code for making regressions 
+def perform_regression(X_train, y_train, X_test, y_test, models, model_num, run_number):
+
+    model_times = {}
+    model_durations = {}  # New dictionary to store model durations
+    model_num = 0
+
     for model_name, model in models.items():
+        model_num += 1
+        run_number += 1
         pipeline = Pipeline([
             ('pca', PCA()),  # PCA for dimensionality reduction
             ('feature_selection', SelectKBest(f_regression)),  # Feature selection using FFS
@@ -210,59 +217,36 @@ def optimized_regression(X_train, y_train, X_test, y_test, models):
         ])
 
         param_grid = {
-            'pca__n_components': range(1, num_columns + 1),  # Number of components for PCA
-            'feature_selection__k': [3, 4, 5, 6, 7],  # Number of selected features
-            #'regression__alpha': [0.1, 1, 10]  # Regularization parameter
+            'pca__n_components': range(1, X_train.shape[1] + 1),  # Number of components for PCA
+            'feature_selection__k': ['all'],  # Select all features
         }
 
         # Perform k-fold cross-validation with grid search
         kfold = KFold(n_splits=5, shuffle=True, random_state=42)
         grid_search = GridSearchCV(pipeline, param_grid, cv=kfold, scoring='neg_mean_squared_error')
-        
+
         model_start_time = time.time()
         grid_search.fit(X_train, y_train)
         model_end_time = time.time()
         model_duration = model_end_time - model_start_time
         
-        opt_times.setdefault(model_name, []).append(model_duration)
-        opt_durations[model_name] = model_duration  # Store model duration
-        
-        best_model = grid_search.best_estimator_
-        y_pred = best_model.predict(X_test)
-        mse = mean_squared_error(y_test, y_pred)
-        
-        print("Model:", model_name)
-        print("Best Model:", best_model)
-        print("Best Parameters:", grid_search.best_params_)
-        print("Mean Squared Error:", mse)
-        print("Model Time:", model_duration)
-        print("-------------------------")
-        
-    return opt_times, opt_durations
-# ---------------------------------------------------   
-
-
-# --------------------------------------------------- 
-# --------------------------------------------------- 
-# --------------------------------------------------- 
-# Code for making regressions 
-def perform_regression(X_train, y_train, models, model_num, run_number):
-    model_times = {}
-    model_durations = {}  # New dictionary to store model durations
-
-    model_num = 0
-    for model_name, model in models.items():
-        model_num += 1
-        run_number += 1
-        model_start_time = time.time()
-        model.fit(X_train, y_train)
-        model_end_time = time.time()
-        model_duration = model_end_time - model_start_time
         model_times.setdefault(model_name, []).append(model_duration)
         model_durations[model_name] = model_duration  # Store model duration
         model_durations[model_num] = model_num  # Store model number
-        model_durations[run_number] = run_number  # Store model number     
+        model_durations[run_number] = run_number  # Store model number 
+
+        best_model = grid_search.best_estimator_
+
+        # Fit the model
+        model.fit(X_train, y_train)
+
+        # Make predictions  
+        y_pred = best_model.predict(X_test)
+
+        #
+        run_number += 1
     return model_times, model_durations, run_number
+
 # ---------------------------------------------------
 
 
@@ -359,7 +343,7 @@ def main():
     # Elastic Net Regressor - ELR
     '02 - ELR - Elastic Net Regressor': ElasticNet(),
     # SGD Regressor
-    '03 - SGD - SGD Regressor': SGDRegressor(max_iter=2000, tol=1e-6),
+    '03 - SGD - SGD Regressor': SGDRegressor(max_iter=5000, tol=1e-6),
     # Bayesian Ridge Regressor - BRR
     '04 - BRR - Bayesian Ridge Regressor': BayesianRidge(),
     # Support Vector Regression - SVR
@@ -377,7 +361,7 @@ def main():
     # Decision Tree Regressor
     '11 - DTR - Decision Tree Regressor': DecisionTreeRegressor(),
     # MLP Regressor - MPL
-    '12 - MLP - MLP Regressor': MLPRegressor(),
+    '12 - MLP - MLP Regressor': MLPRegressor(max_iter=5000),
     # K-Nearest Neighbors - KNN
     '13 - KNN - K-Nearest Neighbors': KNeighborsRegressor(),
     # Random Forest Regressor - RFR
@@ -397,7 +381,7 @@ def main():
     } 
 
 
-    # Starting the loops
+    # Starting the loops in main
     print('Loop entrance')
 
     # Perform regression for each combination of inputs and output
@@ -435,7 +419,7 @@ def main():
                     print(f'Running regression: [{N_entries}] {in_combination_str} in, {out_combination} out, {loop_number} loop')
 
                     # Perform regression and measure time
-                    model_times, model_durations, run_number = perform_regression(X_train, y_train, models, model_num, run_number)
+                    model_times, model_durations, run_number = perform_regression(X_train, y_train, X_test, y_test, models, model_num, run_number)
 
                     # Save the model results and figures
                     model_path = f'figures/{folder_name}/{in_combination_str}/{out_combination}'
