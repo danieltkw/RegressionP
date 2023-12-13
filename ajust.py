@@ -24,7 +24,9 @@ import shutil
 import itertools
 import numpy as np
 import pandas as pd
+import tensorflow as tf
 import matplotlib.pyplot as plt
+import tensorflow_probability as tfp
 from sklearn.pipeline import Pipeline
 from sklearn.decomposition import PCA
 from sklearn.impute import SimpleImputer
@@ -107,6 +109,7 @@ def remove_directory(path, max_retries):
     
     if retries == max_retries:
         print("Maximum number of retries reached. Failed to remove directory.")
+# --------------------------------------------------- 
 
 
 # Function to create directories for figures
@@ -129,6 +132,7 @@ def create_figure_directories(data_imputed):
             for out_combination in out_combinations:
                 if out_combination not in in_combination:
                     os.makedirs(f'figures/{folder_name}/{in_combination_str}/{out_combination}')
+# --------------------------------------------------- 
 
 
 # Function to save the model results and figures
@@ -138,29 +142,8 @@ def save_model_results(model_path, model_name, in_combination_str, out_combinati
     # Make thresholds a variable
     threshold_used = str(threshold_used)
 
-    # List to store the results
-    results_list = []
-
-    # Store the results in a dictionary
-    results = {
-        'RunCount': run_number,
-        'N-in': N_entries,
-        'Features(in)': in_combination_str,
-        'Features(out)': out_combination,
-        'ModelNumber': model_num,
-        'Model': model_name,
-        'R2': r2,
-        'MSE': mse,
-        'RMSE': rmse,
-        'Time': model_durations[model_name],
-        'LoopCount': loop_number 
-    }
-    
-    # Append the dictionary to the results list
-    results_list.append(results)
-
     # Create the result string
-    result = f'R^2 Score: {r2:.4f}, Mean Squared Error: {mse:.4f}, Root Mean Squared Error: {rmse:.4f}, Run Time: {model_durations[model_name]:.4f} ' 
+    result = f'R^2 Score: {r2:.4f}, Mean Squared Error: {mse:.4f}, Root Mean Squared Error: {rmse:.4f}, Run Time: {model_durations[model_name]["model_duration"]:.4f} '
 
     # Save the regression plots in PNG and EPS formats
     fig_folder_path = os.path.join(model_path, 'figures')
@@ -194,63 +177,20 @@ def save_model_results(model_path, model_name, in_combination_str, out_combinati
 
     # Clear the console
     clear_console()
-
-
 # --------------------------------------------------- 
-# --------------------------------------------------- 
-def optimized_regression(X_train, y_train, X_test, y_test, models):
-    opt_times = {}
-    opt_durations = {}  # New dictionary to store model durations
-    
-    for model_name, model in models.items():
-        pipeline = Pipeline([
-            ('pca', PCA()),  # PCA for dimensionality reduction
-            ('feature_selection', SelectKBest(f_regression)),  # Feature selection using FFS
-            ('regression', model)  # Regression model
-        ])
-
-        param_grid = {
-            'pca__n_components': range(1, num_columns + 1),  # Number of components for PCA
-            'feature_selection__k': [3, 4, 5, 6, 7],  # Number of selected features
-            #'regression__alpha': [0.1, 1, 10]  # Regularization parameter
-        }
-
-        # Perform k-fold cross-validation with grid search
-        kfold = KFold(n_splits=5, shuffle=True, random_state=42)
-        grid_search = GridSearchCV(pipeline, param_grid, cv=kfold, scoring='neg_mean_squared_error')
-        
-        model_start_time = time.time()
-        grid_search.fit(X_train, y_train)
-        model_end_time = time.time()
-        model_duration = model_end_time - model_start_time
-        
-        opt_times.setdefault(model_name, []).append(model_duration)
-        opt_durations[model_name] = model_duration  # Store model duration
-        
-        best_model = grid_search.best_estimator_
-        y_pred = best_model.predict(X_test)
-        mse = mean_squared_error(y_test, y_pred)
-        
-        print("Model:", model_name)
-        print("Best Model:", best_model)
-        print("Best Parameters:", grid_search.best_params_)
-        print("Mean Squared Error:", mse)
-        print("Model Time:", model_duration)
-        print("-------------------------")
-        
-    return opt_times, opt_durations
-# ---------------------------------------------------   
+ 
 
 
 # --------------------------------------------------- 
 # --------------------------------------------------- 
 # --------------------------------------------------- 
 # Code for making regressions 
-def perform_regression(X_train, y_train, models, model_num, run_number):
+def perform_regression(X_train, y_train, X_test, y_test, models, model_num, run_number):
     model_times = {}
     model_durations = {}  # New dictionary to store model durations
 
     model_num = 0
+
     for model_name, model in models.items():
         model_num += 1
         run_number += 1
@@ -259,9 +199,24 @@ def perform_regression(X_train, y_train, models, model_num, run_number):
         model_end_time = time.time()
         model_duration = model_end_time - model_start_time
         model_times.setdefault(model_name, []).append(model_duration)
-        model_durations[model_name] = model_duration  # Store model duration
+
+        # Calculate the metrics 
+        y_pred = model.predict(X_test)
+        r2 = r2_score(y_test, y_pred)
+        mse = mean_squared_error(y_test, y_pred)
+        rmse = np.sqrt(mse)
+
+        model_durations[model_name] = {
+            'model_duration': model_duration,
+            'y_pred': y_pred,
+            'r2': r2,
+            'mse': mse,
+            'rmse': rmse
+        }
+
         model_durations[model_num] = model_num  # Store model number
-        model_durations[run_number] = run_number  # Store model number     
+        model_durations[run_number] = run_number  # Store model number
+
     return model_times, model_durations, run_number
 # ---------------------------------------------------
 
@@ -359,7 +314,7 @@ def main():
     # Elastic Net Regressor - ELR
     '02 - ELR - Elastic Net Regressor': ElasticNet(),
     # SGD Regressor
-    '03 - SGD - SGD Regressor': SGDRegressor(max_iter=2000, tol=1e-6),
+    '03 - SGD - SGD Regressor': SGDRegressor(max_iter=5000, tol=1e-6),
     # Bayesian Ridge Regressor - BRR
     '04 - BRR - Bayesian Ridge Regressor': BayesianRidge(),
     # Support Vector Regression - SVR
@@ -377,7 +332,7 @@ def main():
     # Decision Tree Regressor
     '11 - DTR - Decision Tree Regressor': DecisionTreeRegressor(),
     # MLP Regressor - MPL
-    '12 - MLP - MLP Regressor': MLPRegressor(),
+    '12 - MLP - MLP Regressor': MLPRegressor(max_iter=5000),
     # K-Nearest Neighbors - KNN
     '13 - KNN - K-Nearest Neighbors': KNeighborsRegressor(),
     # Random Forest Regressor - RFR
@@ -411,12 +366,16 @@ def main():
 
         for in_combination in in_combinations:
         
-            in_combination_str = '+'.join(in_combination)
+            in_combination_str = '_'.join(in_combination)
+            
             # Clear the console
             clear_console()
 
+            print(f' test: {run_number} ')
+
             model_results_list = []  # List to store the results for this model
             results_opt = [] # List to store the optimized
+            threshold_results_list = [] # List to store the thresholds
 
             for out_combination in out_combinations: 
                 
@@ -435,7 +394,7 @@ def main():
                     print(f'Running regression: [{N_entries}] {in_combination_str} in, {out_combination} out, {loop_number} loop')
 
                     # Perform regression and measure time
-                    model_times, model_durations, run_number = perform_regression(X_train, y_train, models, model_num, run_number)
+                    model_times, model_durations, run_number = perform_regression(X_train, y_train, X_test, y_test, models, model_num, run_number)
 
                     # Save the model results and figures
                     model_path = f'figures/{folder_name}/{in_combination_str}/{out_combination}'
@@ -449,7 +408,6 @@ def main():
                         r2 = r2_score(y_test, y_pred)
                         mse = mean_squared_error(y_test, y_pred)
                         rmse = np.sqrt(mse)
-            
 
                         # Thresholds counter
                         if r2 > thresholds['Good']:
@@ -483,22 +441,13 @@ def main():
                             model_bizarre_results += 1
                             model_total_results += 1
 
-                            # Save the threshold counter results for each model loop
-                            threshold_counter_results = {
-                                'Features(in)': in_combination_str,
-                                'Features(out)': out_combination,
-                                'Threshold Used': threshold_used,
-                                'Model Good Results': model_good_results,
-                                'Model Total Results': model_total_results,
-                            }
-                            threshold_counter_list.append(threshold_counter_results)
-
-                        # Calculate the percentage of good results in each model loop
-                        model_percentage = model_good_results / model_total_results * 100
-                        
                         # Save the results from the model
                         save_model_results(model_path, model_name, in_combination_str, out_combination, X_test, y_test, y_pred, model_durations, threshold_used, r2, mse, rmse, N_entries, run_number, loop_number, model_num)
+                    
+                        # Calculate the percentage of good results in each model loop
+                        model_percentage = model_good_results / model_total_results * 100
 
+                        # test
                         print(f' Saved the regression: [{N_entries}] {in_combination_str} in, {out_combination} out, {run_number} run')
 
                         # Store the results in the model_results_list
@@ -512,20 +461,21 @@ def main():
                             'R2': r2,
                             'MSE': mse,
                             'RMSE': rmse,
-                            'Time': model_durations[model_name],
-                            'LoopCount': loop_number 
+                            'Time': model_durations[model_name]["model_duration"],
+                            'LoopCount': loop_number,
+                            'Threshold Used': threshold_used,
+                            'Model Good Results': model_good_results,
+                            'Model Total Results': model_total_results,
+                            'Percent of good': model_percentage
                         }
                         model_results_list.append(results)
 
                         
-                # Loop made
-                print('Done')
+            # Loop made
+            print('Done')
 
-                # Append the model_results_list to the all_results_list
-                all_results_list.extend(model_results_list)
-
-                # Append the model_results_list to the opt_all_results_list
-                all_optimized_list.extend(results_opt)
+            # Append the model_results_list to the all_results_list
+            all_results_list.extend(model_results_list)
     
     # CSV writing
     print('CSVs time')
@@ -534,19 +484,12 @@ def main():
     overall_csv_path = os.path.join('figures', 'overall_results.csv')
     with open(overall_csv_path, 'w', newline='') as csvfile:
 
-        fieldnames = ['RunCount', 'N-in', 'Features(in)', 'Features(out)', 'ModelNumber', 'Model', 'R2', 'MSE', 'RMSE', 'Time', 'LoopCount']
+        fieldnames = ['RunCount', 'N-in', 'Features(in)', 'Features(out)', 'ModelNumber', 'Model', 'R2', 'MSE', 'RMSE', 'Time', 'LoopCount', 'Threshold Used', 'Model Good Results', 'Model Total Results','Percent of good']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(all_results_list)
 
-    # Write the threshold counter results to a CSV file
-    threshold_counter_csv_path = os.path.join('figures', 'threshold_counter_results.csv')
-    with open(threshold_counter_csv_path, 'w', newline='') as csvfile:
-        fieldnames = ['Features(in)', 'Features(out)', 'Threshold Used', 'Model Good Results', 'Model Total Results']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(threshold_counter_list)
-                
+
 
     # Print total elapsed time
     end_time = time.time()

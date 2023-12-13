@@ -106,6 +106,7 @@ def remove_directory(path, max_retries):
     
     if retries == max_retries:
         print("Maximum number of retries reached. Failed to remove directory.")
+# ---------------------------------------------------
 
 
 # Function to create directories for figures
@@ -122,12 +123,13 @@ def create_figure_directories(data_imputed):
         os.makedirs(f'figures/{folder_name}')
 
         for in_combination in in_combinations:
-            in_combination_str = '+'.join(in_combination)
+            in_combination_str = '_'.join(in_combination)
             os.makedirs(f'figures/{folder_name}/{in_combination_str}')
 
             for out_combination in out_combinations:
                 if out_combination not in in_combination:
                     os.makedirs(f'figures/{folder_name}/{in_combination_str}/{out_combination}')
+# ---------------------------------------------------
 
 
 # Function to save the model results and figures
@@ -137,29 +139,8 @@ def save_model_results(model_path, model_name, in_combination_str, out_combinati
     # Make thresholds a variable
     threshold_used = str(threshold_used)
 
-    # List to store the results
-    results_list = []
-
-    # Store the results in a dictionary
-    results = {
-        'RunCount': run_number,
-        'N-in': N_entries,
-        'Features(in)': in_combination_str,
-        'Features(out)': out_combination,
-        'ModelNumber': model_num,
-        'Model': model_name,
-        'R2': r2,
-        'MSE': mse,
-        'RMSE': rmse,
-        'Time': model_durations[model_name],
-        'LoopCount': loop_number 
-    }
-    
-    # Append the dictionary to the results list
-    results_list.append(results)
-
     # Create the result string
-    result = f'R^2 Score: {r2:.4f}, Mean Squared Error: {mse:.4f}, Root Mean Squared Error: {rmse:.4f}, Run Time: {model_durations[model_name]:.4f} ' 
+    result = f'R^2 Score: {r2:.4f}, Mean Squared Error: {mse:.4f}, Root Mean Squared Error: {rmse:.4f}, Run Time: {model_durations[model_name]["model_duration"]:.4f} '
 
     # Save the regression plots in PNG and EPS formats
     fig_folder_path = os.path.join(model_path, 'figures')
@@ -193,61 +174,76 @@ def save_model_results(model_path, model_name, in_combination_str, out_combinati
 
     # Clear the console
     clear_console()
-
+# ---------------------------------------------------
  
 
 
 # --------------------------------------------------- 
 # --------------------------------------------------- 
 # --------------------------------------------------- 
-# Code for making regressions 
 def perform_regression(X_train, y_train, X_test, y_test, models, model_num, run_number):
-
     model_times = {}
-    model_durations = {}  # New dictionary to store model durations
+    model_durations = {}
     model_num = 0
 
     for model_name, model in models.items():
         model_num += 1
         run_number += 1
+
+        # Determine the number of components for PCA
+        n_components = min(X_train.shape[0], X_train.shape[1])
+
+        # Apply PCA for dimensionality reduction
+        pca = PCA(n_components=n_components)
+        X_train_pca = pca.fit_transform(X_train)
+        X_test_pca = pca.transform(X_test)
+
+        # Apply feature selection (FFS)
+        ffs = SelectKBest(f_regression, k='all')  # Specify the number of features to select
+        X_train_ffs = ffs.fit_transform(X_train_pca, y_train)
+        X_test_ffs = ffs.transform(X_test_pca)
+
+        # Create the regression model
         pipeline = Pipeline([
-            ('pca', PCA()),  # PCA for dimensionality reduction
-            ('feature_selection', SelectKBest(f_regression)),  # Feature selection using FFS
             ('regression', model)  # Regression model
         ])
 
-        param_grid = {
-            'pca__n_components': range(1, X_train.shape[1] + 1),  # Number of components for PCA
-            'feature_selection__k': ['all'],  # Select all features
-        }
+        # Define the parameter grid for the regression model
+        param_grid = {}
 
         # Perform k-fold cross-validation with grid search
         kfold = KFold(n_splits=5, shuffle=True, random_state=42)
         grid_search = GridSearchCV(pipeline, param_grid, cv=kfold, scoring='neg_mean_squared_error')
 
+        # Fit the model with the preprocessed data
         model_start_time = time.time()
-        grid_search.fit(X_train, y_train)
+        grid_search.fit(X_train_ffs, y_train)
         model_end_time = time.time()
         model_duration = model_end_time - model_start_time
-        
         model_times.setdefault(model_name, []).append(model_duration)
-        model_durations[model_name] = model_duration  # Store model duration
-        model_durations[model_num] = model_num  # Store model number
-        model_durations[run_number] = run_number  # Store model number 
 
         best_model = grid_search.best_estimator_
 
-        # Fit the model
-        model.fit(X_train, y_train)
+        # Calculate the metrics 
+        y_pred = best_model.predict(X_test_ffs)
+        r2 = r2_score(y_test, y_pred)
+        mse = mean_squared_error(y_test, y_pred)
+        rmse = np.sqrt(mse)
 
-        # Make predictions  
-        y_pred = best_model.predict(X_test)
 
-        #
-        run_number += 1
+        model_durations[model_name] = {
+            'model_duration': model_duration,
+            'y_pred': y_pred,
+            'r2': r2,
+            'mse': mse,
+            'rmse': rmse
+        }
+
+        model_durations[model_num] = model_num  # Store model number
+        model_durations[run_number] = run_number  # Store model number
+
     return model_times, model_durations, run_number
-
-# ---------------------------------------------------
+# ---------------------------------------------------    
 
 
 # --------------------------------------------------- 
@@ -311,9 +307,6 @@ def main():
     # Initialize a list to store the results from all models
     all_results_list = []
 
-    # Initialize a list to store the results from all models
-    all_optimized_list = []  
-
     # Initialize a list to store the threshold counter results
     threshold_counter_list = []
 
@@ -337,47 +330,46 @@ def main():
 
     # Define regression models
     models = {
-
-    # Linear Regression Model - LRM
-    '01 - LRM - Linear Regression Model': LinearRegression(), 
-    # Elastic Net Regressor - ELR
-    '02 - ELR - Elastic Net Regressor': ElasticNet(),
-    # SGD Regressor
-    '03 - SGD - SGD Regressor': SGDRegressor(max_iter=5000, tol=1e-6),
-    # Bayesian Ridge Regressor - BRR
-    '04 - BRR - Bayesian Ridge Regressor': BayesianRidge(),
-    # Support Vector Regression - SVR
-    '05 - SVR - Support Vector Regression': SVR(),
-    # Gradient Boosting Regressor - GBR
-    '06 - GBR - Gradient Boosting Regressor': GradientBoostingRegressor(),
-    # Cat Boost Regressor - CBR
-    '07 - CBR - Cat Boost Regressor': CatBoostRegressor(verbose=False),
-    # Kernel Ridge Regressor - KRR
-    '08 - KRR - Kernel Ridge Regressor': KernelRidge(),
-    # XGBoost Regressor - XGB
-    '09 - XGB - XGBoost Regressor': XGBRegressor(),
-    # LightGBM Regressor - GBM
-    '10 - GBM - LightGBM Regressor': LGBMRegressor(),
-    # Decision Tree Regressor
-    '11 - DTR - Decision Tree Regressor': DecisionTreeRegressor(),
-    # MLP Regressor - MPL
-    '12 - MLP - MLP Regressor': MLPRegressor(max_iter=5000),
-    # K-Nearest Neighbors - KNN
-    '13 - KNN - K-Nearest Neighbors': KNeighborsRegressor(),
-    # Random Forest Regressor - RFR
-    '14 - RFR - Random Forest Regressor': RandomForestRegressor(),
-    # Ada Boost Regressor - ABR
-    '15 - ABR - Ada Boost Regressor': AdaBoostRegressor(),
-    # Gaussian Process Regression - GPR
-    '16 - GPR - Gaussian Process Regression': GaussianProcessRegressor(),
-    # Ridge Regression Model - RRM
-    '17 - RRM - Ridge Regression Model': Ridge(),
-    # Bagging Regressor Model - BRM
-    '18 - BRM - Bagging Regressor Model': BaggingRegressor(),
-    # Hist Gradient Boosting Regressor - HGR
-    '19 - HGR - Hist Gradient Boosting Regressor': HistGradientBoostingRegressor(),
-    # Extra Trees Regressor - ETR
-    '20 - ETR - Extra Trees Regressor': ExtraTreesRegressor()
+        # Linear Regression Model - LRM
+        '01 - LRM - Linear Regression Model': LinearRegression(), 
+        # Elastic Net Regressor - ELR
+        '02 - ELR - Elastic Net Regressor': ElasticNet(),
+        # SGD Regressor
+        '03 - SGD - SGD Regressor': SGDRegressor(max_iter=5000, tol=1e-6),
+        # Bayesian Ridge Regressor - BRR
+        '04 - BRR - Bayesian Ridge Regressor': BayesianRidge(),
+        # Support Vector Regression - SVR
+        '05 - SVR - Support Vector Regression': SVR(),
+        # Gradient Boosting Regressor - GBR
+        '06 - GBR - Gradient Boosting Regressor': GradientBoostingRegressor(),
+        # Cat Boost Regressor - CBR
+        '07 - CBR - Cat Boost Regressor': CatBoostRegressor(verbose=False),
+        # Kernel Ridge Regressor - KRR
+        '08 - KRR - Kernel Ridge Regressor': KernelRidge(),
+        # XGBoost Regressor - XGB
+        '09 - XGB - XGBoost Regressor': XGBRegressor(),
+        # LightGBM Regressor - GBM
+        '10 - GBM - LightGBM Regressor': LGBMRegressor(),
+        # Decision Tree Regressor
+        '11 - DTR - Decision Tree Regressor': DecisionTreeRegressor(),
+        # MLP Regressor - MPL
+        '12 - MLP - MLP Regressor': MLPRegressor(max_iter=5000),
+        # K-Nearest Neighbors - KNN
+        '13 - KNN - K-Nearest Neighbors': KNeighborsRegressor(),
+        # Random Forest Regressor - RFR
+        '14 - RFR - Random Forest Regressor': RandomForestRegressor(),
+        # Ada Boost Regressor - ABR
+        '15 - ABR - Ada Boost Regressor': AdaBoostRegressor(),
+        # Gaussian Process Regression - GPR
+        '16 - GPR - Gaussian Process Regression': GaussianProcessRegressor(),
+        # Ridge Regression Model - RRM
+        '17 - RRM - Ridge Regression Model': Ridge(),
+        # Bagging Regressor Model - BRM
+        '18 - BRM - Bagging Regressor Model': BaggingRegressor(),
+        # Hist Gradient Boosting Regressor - HGR
+        '19 - HGR - Hist Gradient Boosting Regressor': HistGradientBoostingRegressor(),
+        # Extra Trees Regressor - ETR
+        '20 - ETR - Extra Trees Regressor': ExtraTreesRegressor()
     } 
 
 
@@ -395,12 +387,12 @@ def main():
 
         for in_combination in in_combinations:
         
-            in_combination_str = '+'.join(in_combination)
+            in_combination_str = '_'.join(in_combination)
             # Clear the console
             clear_console()
 
             model_results_list = []  # List to store the results for this model
-            results_opt = [] # List to store the optimized
+
 
             for out_combination in out_combinations: 
                 
@@ -426,14 +418,12 @@ def main():
                     os.makedirs(model_path, exist_ok=True)
 
 
-                    for model_name, model in models.items():
-
-                        # Calculate the metrics 
-                        y_pred = model.predict(X_test)
-                        r2 = r2_score(y_test, y_pred)
-                        mse = mean_squared_error(y_test, y_pred)
-                        rmse = np.sqrt(mse)
-            
+                    for model_name, model in models.items():      
+                        
+                        y_pred = model_durations[model_name]['y_pred']
+                        r2 = model_durations[model_name]['r2']
+                        mse = model_durations[model_name]['mse']
+                        rmse = model_durations[model_name]['rmse']
 
                         # Thresholds counter
                         if r2 > thresholds['Good']:
@@ -467,15 +457,6 @@ def main():
                             model_bizarre_results += 1
                             model_total_results += 1
 
-                            # Save the threshold counter results for each model loop
-                            threshold_counter_results = {
-                                'Features(in)': in_combination_str,
-                                'Features(out)': out_combination,
-                                'Threshold Used': threshold_used,
-                                'Model Good Results': model_good_results,
-                                'Model Total Results': model_total_results,
-                            }
-                            threshold_counter_list.append(threshold_counter_results)
 
                         # Calculate the percentage of good results in each model loop
                         model_percentage = model_good_results / model_total_results * 100
@@ -496,21 +477,22 @@ def main():
                             'R2': r2,
                             'MSE': mse,
                             'RMSE': rmse,
-                            'Time': model_durations[model_name],
-                            'LoopCount': loop_number 
+                            'Time': model_durations[model_name]["model_duration"],
+                            'LoopCount': loop_number,
+                            'Threshold Used': threshold_used,
+                            'Model Good Results': model_good_results,
+                            'Model Total Results': model_total_results,
+                            'Percent of good': model_percentage
                         }
                         model_results_list.append(results)
 
                         
-                # Loop made
-                print('Done')
+            # Loop made
+            print('Done')
 
-                # Append the model_results_list to the all_results_list
-                all_results_list.extend(model_results_list)
+            # Append the model_results_list to the all_results_list
+            all_results_list.extend(model_results_list)
 
-                # Append the model_results_list to the opt_all_results_list
-                all_optimized_list.extend(results_opt)
-    
     # CSV writing
     print('CSVs time')
 
@@ -518,19 +500,11 @@ def main():
     overall_csv_path = os.path.join('figures', 'overall_results.csv')
     with open(overall_csv_path, 'w', newline='') as csvfile:
 
-        fieldnames = ['RunCount', 'N-in', 'Features(in)', 'Features(out)', 'ModelNumber', 'Model', 'R2', 'MSE', 'RMSE', 'Time', 'LoopCount']
+        fieldnames = ['RunCount', 'N-in', 'Features(in)', 'Features(out)', 'ModelNumber', 'Model', 'R2', 'MSE', 'RMSE', 'Time', 'LoopCount', 'Threshold Used', 'Model Good Results', 'Model Total Results','Percent of good']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(all_results_list)
 
-    # Write the threshold counter results to a CSV file
-    threshold_counter_csv_path = os.path.join('figures', 'threshold_counter_results.csv')
-    with open(threshold_counter_csv_path, 'w', newline='') as csvfile:
-        fieldnames = ['Features(in)', 'Features(out)', 'Threshold Used', 'Model Good Results', 'Model Total Results']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(threshold_counter_list)
-                
 
     # Print total elapsed time
     end_time = time.time()
@@ -557,6 +531,5 @@ if __name__ == '__main__':
 # # # #
 # # # # end
 # # # #
-
 
 
